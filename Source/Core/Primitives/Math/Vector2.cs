@@ -68,8 +68,8 @@ namespace Duality
 		/// <param name="value">The value that will initialize this instance.</param>
 		public Vector2(float value)
 		{
-			X = value;
-			Y = value;
+			this.X = value;
+			this.Y = value;
 		}
 		/// <summary>
 		/// Constructs a new Vector2.
@@ -78,8 +78,8 @@ namespace Duality
 		/// <param name="y">The y coordinate of the net Vector2.</param>
 		public Vector2(float x, float y)
 		{
-			X = x;
-			Y = y;
+			this.X = x;
+			this.Y = y;
 		}
 		/// <summary>
 		/// Constructs a new vector from angle and length.
@@ -100,7 +100,7 @@ namespace Duality
 		{
 			get
 			{
-				return (float)System.Math.Sqrt(X * X + Y * Y);
+				return (float)System.Math.Sqrt(this.X * this.X + this.Y * this.Y);
 			}
 		}
 		/// <summary>
@@ -115,7 +115,7 @@ namespace Duality
 		{
 			get
 			{
-				return X * X + Y * Y;
+				return this.X * this.X + this.Y * this.Y;
 			}
 		}
 		/// <summary>
@@ -125,7 +125,7 @@ namespace Duality
 		{
 			get
 			{
-				return (float)((Math.Atan2(Y, X) + Math.PI * 2.5) % (Math.PI * 2));
+				return (float)((Math.Atan2(this.Y, this.X) + Math.PI * 2.5) % (Math.PI * 2));
 			}
 		}
 
@@ -136,7 +136,7 @@ namespace Duality
 		{
 			get
 			{
-				return new Vector2(-Y, X);
+				return new Vector2(-this.Y, this.X);
 			}
 		}
 		/// <summary>
@@ -146,7 +146,7 @@ namespace Duality
 		{
 			get
 			{
-				return new Vector2(Y, -X);
+				return new Vector2(this.Y, -this.X);
 			}
 		}
 		/// <summary>
@@ -161,7 +161,7 @@ namespace Duality
 
 				float scale = 1.0f / length;
 				return new Vector2(
-					this.X * scale, 
+					this.X * scale,
 					this.Y * scale);
 			}
 		}
@@ -390,7 +390,7 @@ namespace Duality
 			Vector2.Dot(ref first, ref second, out temp);
 			result = (float)System.Math.Acos(temp / (first.Length * second.Length));
 		}
-		
+
 		/// <summary>
 		/// Transforms a vector by a quaternion rotation.
 		/// </summary>
@@ -454,9 +454,9 @@ namespace Duality
 		/// <returns>Result of addition.</returns>
 		public static Vector2 operator +(Vector2 left, Vector2 right)
 		{
-			left.X += right.X;
-			left.Y += right.Y;
-			return left;
+			return new Vector2(
+				left.X + right.X, 
+				left.Y + right.Y);
 		}
 		/// <summary>
 		/// Subtracts the specified instances.
@@ -466,9 +466,9 @@ namespace Duality
 		/// <returns>Result of subtraction.</returns>
 		public static Vector2 operator -(Vector2 left, Vector2 right)
 		{
-			left.X -= right.X;
-			left.Y -= right.Y;
-			return left;
+			return new Vector2(
+				left.X - right.X, 
+				left.Y - right.Y);
 		}
 		/// <summary>
 		/// Negates the specified instance.
@@ -477,9 +477,9 @@ namespace Duality
 		/// <returns>Result of negation.</returns>
 		public static Vector2 operator -(Vector2 vec)
 		{
-			vec.X = -vec.X;
-			vec.Y = -vec.Y;
-			return vec;
+			return new Vector2(
+				-vec.X, 
+				-vec.Y);
 		}
 		/// <summary>
 		/// Multiplies the specified instance by a scalar.
@@ -489,9 +489,9 @@ namespace Duality
 		/// <returns>Result of multiplication.</returns>
 		public static Vector2 operator *(Vector2 vec, float scale)
 		{
-			vec.X *= scale;
-			vec.Y *= scale;
-			return vec;
+			return new Vector2(
+				vec.X * scale, 
+				vec.Y * scale);
 		}
 		/// <summary>
 		/// Multiplies the specified instance by a scalar.
@@ -501,9 +501,7 @@ namespace Duality
 		/// <returns>Result of multiplication.</returns>
 		public static Vector2 operator *(float scale, Vector2 vec)
 		{
-			vec.X *= scale;
-			vec.Y *= scale;
-			return vec;
+			return vec * scale;
 		}
 		/// <summary>
 		/// Scales the specified instance by a vector.
@@ -513,9 +511,9 @@ namespace Duality
 		/// <returns>Result of multiplication.</returns>
 		public static Vector2 operator *(Vector2 vec, Vector2 scale)
 		{
-			vec.X *= scale.X;
-			vec.Y *= scale.Y;
-			return vec;
+			return new Vector2(
+				vec.X * scale.X, 
+				vec.Y * scale.Y);
 		}
 		/// <summary>
 		/// Divides the specified instance by a scalar.
@@ -525,10 +523,7 @@ namespace Duality
 		/// <returns>Result of the division.</returns>
 		public static Vector2 operator /(Vector2 vec, float scale)
 		{
-			float mult = 1.0f / scale;
-			vec.X *= mult;
-			vec.Y *= mult;
-			return vec;
+			return vec * (1.0f / scale);
 		}
 		/// <summary>
 		/// Divides the specified instance by a vector.
@@ -538,9 +533,9 @@ namespace Duality
 		/// <returns>Result of the division.</returns>
 		public static Vector2 operator /(Vector2 vec, Vector2 scale)
 		{
-			vec.X /= scale.X;
-			vec.Y /= scale.Y;
-			return vec;
+			return new Vector2(
+				vec.X / scale.X, 
+				vec.Y / scale.Y);
 		}
 		/// <summary>
 		/// Compares the specified instances for equality.
@@ -569,7 +564,7 @@ namespace Duality
 		/// <returns></returns>
 		public override string ToString()
 		{
-			return String.Format("({0:F}, {1:F})", X, Y);
+			return string.Format("({0:F}, {1:F})", this.X, this.Y);
 		}
 		/// <summary>
 		/// Returns the hashcode for this instance.
@@ -577,7 +572,7 @@ namespace Duality
 		/// <returns>A System.Int32 containing the unique hashcode for this instance.</returns>
 		public override int GetHashCode()
 		{
-			return X.GetHashCode() ^ Y.GetHashCode();
+			return this.X.GetHashCode() ^ this.Y.GetHashCode();
 		}
 		/// <summary>
 		/// Indicates whether this instance and a specified object are equal.
@@ -600,8 +595,8 @@ namespace Duality
 		public bool Equals(Vector2 other)
 		{
 			return
-				X == other.X &&
-				Y == other.Y;
+				this.X == other.X &&
+				this.Y == other.Y;
 		}
 	}
 }
