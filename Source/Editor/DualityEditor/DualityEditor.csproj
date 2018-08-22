@@ -44,8 +44,8 @@
     <LangVersion>4</LangVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="AdamsLair.WinForms, Version=1.1.14.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\..\..\packages\AdamsLair.WinForms.1.1.14\lib\net45\AdamsLair.WinForms.dll</HintPath>
+    <Reference Include="AdamsLair.WinForms, Version=1.1.15.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\..\..\packages\AdamsLair.WinForms.1.1.15\lib\net45\AdamsLair.WinForms.dll</HintPath>
     </Reference>
     <Reference Include="Aga.Controls, Version=1.7.6.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\..\..\packages\AdamsLair.TreeViewAdv.1.7.6.0\lib\net20\Aga.Controls.dll</HintPath>
@@ -80,6 +80,7 @@
       <Link>DefaultPluginLoader.cs</Link>
     </Compile>
     <Compile Include="AssetManagement\AssetExportFinishedEventArgs.cs" />
+    <Compile Include="AssetManagement\AssetImporter.cs" />
     <Compile Include="AssetManagement\AssetInternalHelper.cs" />
     <Compile Include="AssetManagement\Export\ExtMethodsIAssetExportEnvironment.cs" />
     <Compile Include="AssetManagement\AssetImportFinishedEventArgs.cs" />
@@ -202,6 +203,7 @@
     <Compile Include="Properties\GeneralResNames.cs" />
     <Compile Include="UndoRedoActions\AddDictionaryKeyAction.cs" />
     <Compile Include="UndoRedoActions\EditResourceAssetDataAction.cs" />
+    <Compile Include="UndoRedoActions\PasteGameObjectAction.cs" />
     <Compile Include="UndoRedoActions\RemoveDictionaryKeyAction.cs" />
     <Compile Include="UndoRedoActions\ResizeListAction.cs" />
     <Compile Include="Utility\BuildHelper.cs" />
@@ -211,6 +213,7 @@
     <Compile Include="Utility\EventArgs\HighlightObjectEventArgs.cs" />
     <Compile Include="Utility\EventArgs\SelectionChangedEventArgs.cs" />
     <Compile Include="Utility\EventArgs\HelpStackChangedEventArgs.cs" />
+    <Compile Include="Utility\Extensions\DataObjectStorage.cs" />
     <Compile Include="Utility\GlobalColorPickOperation.cs" />
     <Compile Include="Utility\SelectionChangeReason.cs" />
     <Compile Include="Utility\HighlightMode.cs" />
