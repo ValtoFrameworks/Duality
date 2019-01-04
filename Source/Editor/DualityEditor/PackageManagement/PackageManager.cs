@@ -1,12 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.IO;
-using System.Xml;
-using System.Xml.Linq;
 using System.Windows.Forms;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 
 using NuGet;
 
@@ -33,7 +31,7 @@ namespace Duality.Editor.PackageManagement
 		/// If none of these show up anywhere in the deep dependency graph of a Duality package,
 		/// it will be assumed that dependencies are simply not specified properly.
 		/// </summary>
-		private readonly string[] DualityPackageNames = new string[] 
+		private static readonly string[] DualityPackageNames = new string[] 
 		{
 			"AdamsLair.Duality",
 			"AdamsLair.Duality.Editor",
@@ -45,8 +43,9 @@ namespace Duality.Editor.PackageManagement
 		private PackageManagerEnvironment env          = null;
 		private PackageCache              cache        = null;
 
-		private Dictionary<PackageName,bool> licenseAccepted  = new Dictionary<PackageName,bool>();
-		private PackageDependencyWalker      dependencyWalker = null;
+		private Dictionary<PackageName,bool>  licenseAccepted      = new Dictionary<PackageName,bool>();
+		private List<PackageDependencyWalker> dependencyWalkerPool = new List<PackageDependencyWalker>();
+		private object                        dependencyWalkerLock = new object();
 
 		private NuGet.PackageManager     manager    = null;
 		private NuGet.IPackageRepository repository = null;
@@ -132,10 +131,10 @@ namespace Duality.Editor.PackageManagement
 					}
 					catch (Exception e)
 					{
-						Log.Editor.WriteError(
+						Logs.Editor.WriteError(
 							"Failed to load PackageManager config file '{0}': {1}",
 							configFilePath,
-							Log.Exception(e));
+							LogFormat.Exception(e));
 					}
 				}
 			}
@@ -160,8 +159,6 @@ namespace Duality.Editor.PackageManagement
 
 			this.logger = new PackageManagerLogger();
 			this.manager.Logger = this.logger;
-
-			this.dependencyWalker = new PackageDependencyWalker(this.GetPackage);
 
 			// Retrieve information about local packages
 			this.RetrieveLocalPackageInfo();
@@ -282,8 +279,8 @@ namespace Duality.Editor.PackageManagement
 				return;
 			}
 
-			Log.Editor.Write("Installing package '{0}'...", packageName);
-			Log.Editor.PushIndent();
+			Logs.Editor.Write("Installing package '{0}'...", packageName);
+			Logs.Editor.PushIndent();
 			try
 			{
 				// Request NuGet to install the package
@@ -291,7 +288,7 @@ namespace Duality.Editor.PackageManagement
 			}
 			finally
 			{
-				Log.Editor.PopIndent();
+				Logs.Editor.PopIndent();
 			}
 		}
 		/// <summary>
@@ -304,8 +301,8 @@ namespace Duality.Editor.PackageManagement
 		}
 		private void UninstallPackage(PackageName packageName, bool force)
 		{
-			Log.Editor.Write("Uninstalling package '{0}'...", packageName);
-			Log.Editor.PushIndent();
+			Logs.Editor.Write("Uninstalling package '{0}'...", packageName);
+			Logs.Editor.PushIndent();
 			try
 			{
 				// Find the local package that we'll uninstall
@@ -320,10 +317,12 @@ namespace Duality.Editor.PackageManagement
 				List<PackageInfo> uninstallDependencies = new List<PackageInfo>();
 				if (uninstallPackageInfo != null)
 				{
-					this.dependencyWalker.Clear();
-					this.dependencyWalker.WalkGraph(uninstallPackageInfo);
-					uninstallDependencies.AddRange(this.dependencyWalker.VisitedPackages);
+					PackageDependencyWalker dependencyWalker = this.RentDependencyWalker();
+					dependencyWalker.IgnorePackage("NETStandard.Library"); // Avoid dependency explosion, treat as opaque
+					dependencyWalker.WalkGraph(uninstallPackageInfo);
+					uninstallDependencies.AddRange(dependencyWalker.VisitedPackages);
 					uninstallDependencies.RemoveAll(package => package.Id == uninstallPackageInfo.Id);
+					this.ReturnDependencyWalker(ref dependencyWalker);
 				}
 
 				// Filter out all dependencies that are used by other Duality packages
@@ -334,15 +333,17 @@ namespace Duality.Editor.PackageManagement
 					PackageInfo otherPackageInfo = otherPackage.Info ?? this.GetPackage(otherPackage.Name);
 					if (otherPackageInfo == null) continue;
 				
-					this.dependencyWalker.Clear();
-					this.dependencyWalker.IgnorePackage(uninstallPackage.Id);
-					this.dependencyWalker.WalkGraph(otherPackageInfo);
-					foreach (PackageInfo dependency in this.dependencyWalker.VisitedPackages)
+					PackageDependencyWalker dependencyWalker = this.RentDependencyWalker();
+					dependencyWalker.IgnorePackage(uninstallPackage.Id);
+					dependencyWalker.IgnorePackage("NETStandard.Library"); // Avoid dependency explosion, treat as opaque
+					dependencyWalker.WalkGraph(otherPackageInfo);
+					foreach (PackageInfo dependency in dependencyWalker.VisitedPackages)
 					{
 						// Don't check versions, as dependencies are usually not resolved
 						// with an exact version match.
 						uninstallDependencies.RemoveAll(item => item.Id == dependency.Id);
 					}
+					this.ReturnDependencyWalker(ref dependencyWalker);
 				}
 
 				// Uninstall the package itself
@@ -368,7 +369,7 @@ namespace Duality.Editor.PackageManagement
 			}
 			finally
 			{
-				Log.Editor.PopIndent();
+				Logs.Editor.PopIndent();
 			}
 		}
 		/// <summary>
@@ -430,15 +431,15 @@ namespace Duality.Editor.PackageManagement
 				return;
 			}
 			
-			Log.Editor.Write("Updating package '{0}'...", packageName);
-			Log.Editor.PushIndent();
+			Logs.Editor.Write("Updating package '{0}'...", packageName);
+			Logs.Editor.PushIndent();
 			try
 			{
 				this.manager.UpdatePackage(latestPackage, true, false);
 			}
 			finally
 			{
-				Log.Editor.PopIndent();
+				Logs.Editor.PopIndent();
 			}
 		}
 
@@ -454,29 +455,29 @@ namespace Duality.Editor.PackageManagement
 		{
 			if (!File.Exists(this.env.UpdateFilePath)) return false;
 
-			Log.Editor.Write("Applying package update...");
-			Log.Editor.PushIndent();
+			Logs.Editor.Write("Applying package update...");
+			Logs.Editor.PushIndent();
 			try
 			{
 				// Manually perform update operations on the updater itself
 				try
 				{
-					Log.Editor.Write("Preparing updater...");
+					Logs.Editor.Write("Preparing updater...");
 					PackageUpdateSchedule schedule = this.PrepareUpdateSchedule();
 					schedule.ApplyUpdaterChanges(this.env.UpdaterExecFilePath);
 					this.SaveUpdateSchedule(schedule);
 				}
 				catch (Exception e)
 				{
-					Log.Editor.WriteError(
+					Logs.Editor.WriteError(
 						"Can't update '{0}', because an error occurred: {1}", 
 						this.env.UpdaterExecFilePath, 
-						Log.Exception(e));
+						LogFormat.Exception(e));
 					return false;
 				}
 
 				// Run the updater application
-				Log.Editor.Write("Running updater...");
+				Logs.Editor.Write("Running updater...");
 				Process.Start(this.env.UpdaterExecFilePath, string.Format("\"{0}\" \"{1}\" \"{2}\"",
 					this.env.UpdateFilePath,
 					restartEditor ? typeof(DualityEditorApp).Assembly.Location : "",
@@ -484,7 +485,7 @@ namespace Duality.Editor.PackageManagement
 			}
 			finally
 			{
-				Log.Editor.PopIndent();
+				Logs.Editor.PopIndent();
 			}
 
 			return true;
@@ -548,9 +549,11 @@ namespace Duality.Editor.PackageManagement
 				return PackageCompatibility.Definite;
 
 			// Determine all packages that might be updated or installed
-			this.dependencyWalker.Clear();
-			this.dependencyWalker.WalkGraph(target);
-			List<PackageInfo> touchedPackages = this.dependencyWalker.VisitedPackages.ToList();
+			PackageDependencyWalker dependencyWalker = this.RentDependencyWalker();
+			dependencyWalker.IgnorePackage("NETStandard.Library"); // Avoid dependency explosion, doesn't matter for Duality compatibility anyway
+			dependencyWalker.WalkGraph(target);
+			List<PackageInfo> touchedPackages = dependencyWalker.VisitedPackages.ToList();
+			this.ReturnDependencyWalker(ref dependencyWalker);
 
 			// Verify properly specified dependencies for Duality packages
 			if (target.IsDualityPackage)
@@ -605,16 +608,19 @@ namespace Duality.Editor.PackageManagement
 			if (packages.Count < 2) return;
 
 			// Determine the number of deep dependencies for each package
-			this.dependencyWalker.Clear();
-			this.dependencyWalker.WalkGraph(packages);
+			PackageDependencyWalker dependencyWalker = this.RentDependencyWalker();
+			dependencyWalker.IgnorePackage("NETStandard.Library"); // Avoid dependency explosion, treat as opaque
+			dependencyWalker.WalkGraph(packages);
 
 			// Sort packages according to their deep dependency counts
 			packages.StableSort((a, b) =>
 			{
-				int countA = (a == null) ? 0 : this.dependencyWalker.GetDependencyCount(a.Name);
-				int countB = (b == null) ? 0 : this.dependencyWalker.GetDependencyCount(b.Name);
+				int countA = (a == null) ? 0 : dependencyWalker.GetDependencyCount(a.Name);
+				int countB = (b == null) ? 0 : dependencyWalker.GetDependencyCount(b.Name);
 				return countA - countB;
 			});
+
+			this.ReturnDependencyWalker(ref dependencyWalker);
 		}
 		/// <summary>
 		/// Sorts the specified list of packages according to their dependencies, guaranteeing that no package
@@ -690,20 +696,60 @@ namespace Duality.Editor.PackageManagement
 			}
 			catch (UriFormatException)
 			{
-				Log.Editor.WriteError("NuGet repository URI '{0}' has an incorrect format and will be skipped.", repositoryUrl);
+				Logs.Editor.WriteError("NuGet repository URI '{0}' has an incorrect format and will be skipped.", repositoryUrl);
 				return null;
 			}
 
 			return PackageRepositoryFactory.Default.CreateRepository(repositoryUrl);
 		}
 
+		/// <summary>
+		/// Rents a pooled <see cref="PackageDependencyWalker"/> instance, or allocates a new one when required.
+		/// Not returning a rented instance will harm efficiency, but not cause a leak.
+		/// </summary>
+		/// <returns></returns>
+		private PackageDependencyWalker RentDependencyWalker()
+		{
+			lock (this.dependencyWalkerLock)
+			{
+				if (this.dependencyWalkerPool.Count == 0)
+				{
+					return new PackageDependencyWalker(this.GetPackage);
+				}
+				else
+				{
+					int lastWalkerIndex = this.dependencyWalkerPool.Count - 1;
+					PackageDependencyWalker walker = this.dependencyWalkerPool[lastWalkerIndex];
+					this.dependencyWalkerPool.RemoveAt(lastWalkerIndex);
+					return walker;
+				}
+			}
+		}
+		/// <summary>
+		/// Returns a previously rented <see cref="PackageDependencyWalker"/> instance, and nullifies the
+		/// provided reference to it afterwards to avoid further use.
+		/// </summary>
+		/// <param name="walker"></param>
+		private void ReturnDependencyWalker(ref PackageDependencyWalker walker)
+		{
+			walker.Clear();
+			lock (this.dependencyWalkerLock)
+			{
+				this.dependencyWalkerPool.Add(walker);
+				walker = null;
+			}
+		}
+
 		private bool CheckDeepLicenseAgreements(NuGet.IPackage package)
 		{
-			this.dependencyWalker.Clear();
-			this.dependencyWalker.WalkGraph(new PackageName(package.Id, package.Version.Version));
+			PackageDependencyWalker dependencyWalker = this.RentDependencyWalker();
+			dependencyWalker.IgnorePackage("NETStandard.Library"); // Avoid dependency explosion, doesn't require license acceptance anyway
+			dependencyWalker.WalkGraph(new PackageName(package.Id, package.Version.Version));
 
-			List<PackageInfo> packageGraph = this.dependencyWalker.VisitedPackages.ToList();
+			List<PackageInfo> packageGraph = dependencyWalker.VisitedPackages.ToList();
 			List<NuGet.IPackage> installedPackages = this.manager.LocalRepository.GetPackages().ToList();
+
+			this.ReturnDependencyWalker(ref dependencyWalker);
 
 			foreach (PackageInfo visitedPackage in packageGraph)
 			{
@@ -768,9 +814,9 @@ namespace Duality.Editor.PackageManagement
 				catch (Exception exception)
 				{
 					updateSchedule = null;
-					Log.Editor.WriteError("Error parsing existing package update schedule '{0}': {1}", 
+					Logs.Editor.WriteError("Error parsing existing package update schedule '{0}': {1}", 
 						Path.GetFileName(updateFilePath), 
-						Log.Exception(exception));
+						LogFormat.Exception(exception));
 				}
 			}
 
@@ -803,14 +849,58 @@ namespace Duality.Editor.PackageManagement
 				contentBaseDir = this.env.RootPath;
 			}
 
-			IPackageFile[] packageFiles;
+			List<IPackageFile> applicableFiles = new List<IPackageFile>();
 			try
 			{
-				packageFiles = package.GetFiles()
-					.Where(f => f.TargetFramework == null || f.TargetFramework.Version < Environment.Version)
-					.OrderByDescending(f => f.TargetFramework == null ? new Version() : f.TargetFramework.Version)
-					.OrderByDescending(f => f.TargetFramework == null)
-					.ToArray();
+				// Separate package files in to framework-dependent lib files and framework-independent 
+				// non-lib files. Those include content and source files, but also any other folder structure
+				// that isn't specifically a lib binary.
+				List<IPackageFile> files = package.GetFiles().ToList();
+				List<IPackageFile> libFiles = new List<IPackageFile>();
+				List<IPackageFile> nonLibFiles = new List<IPackageFile>();
+				foreach (IPackageFile file in files)
+				{
+					string path = file.Path.Replace('/', '\\');
+					bool isLibFile = path.StartsWith("lib\\");
+					if (isLibFile)
+						libFiles.Add(file);
+					else
+						nonLibFiles.Add(file);
+				}
+				List<IPackageFile> applicableLibFiles = new List<IPackageFile>();
+
+				// Determine which frameworks are available in this package.
+				// Note that due to the NuGet version we're using, .NETStandard target frameworks
+				// are unknown and will be returned as "Unsupported, Version 0.0".
+				List<FrameworkName> availableFrameworks = libFiles.Select(f => f.TargetFramework).Distinct().ToList();
+
+				// Select the closest matching framework this package has and use all of its files,
+				// and none of the others
+				FrameworkName matchingFramework = SelectBestFrameworkMatch(availableFrameworks);
+				applicableLibFiles.AddRange(libFiles.Where(f => f.TargetFramework == matchingFramework));
+
+				// Check if we have files without a target framework that do not have an equivalent
+				// in the files from the selected match. To support legacy packages, we'll use them
+				// as a fallback. Packages that do this are for example AdamsLair.OpenTK, AdamsLair.WinForms
+				// and others which have a set of explicit root files and a subset of implicit framework files.
+				if (matchingFramework != null)
+				{
+					List<IPackageFile> rootFiles = libFiles.Where(f => f.TargetFramework == null).ToList();
+					foreach (IPackageFile file in rootFiles)
+					{
+						string fileName = Path.GetFileName(file.Path);
+						bool hasOverride = applicableLibFiles.Any(f => Path.GetFileName(f.Path) == fileName);
+						if (!hasOverride)
+						{
+							applicableLibFiles.Add(file);
+						}
+					}
+				}
+
+				// Non-lib files (content, source) are treated differently and used as-is, since they are
+				// not dependent on any target framework and just carried over.
+				applicableFiles.AddRange(applicableLibFiles);
+				applicableFiles.AddRange(nonLibFiles);
 			}
 			catch (DirectoryNotFoundException)
 			{
@@ -818,7 +908,7 @@ namespace Duality.Editor.PackageManagement
 				return fileMapping;
 			}
 
-			foreach (IPackageFile f in packageFiles)
+			foreach (IPackageFile f in applicableFiles)
 			{
 				// Determine where the file needs to go
 				string targetPath = f.EffectivePath;
@@ -861,14 +951,14 @@ namespace Duality.Editor.PackageManagement
 		
 		private void manager_PackageUninstalled(object sender, PackageOperationEventArgs e)
 		{
-			Log.Editor.Write("Integrating uninstall of package '{0} {1}'...", e.Package.Id, e.Package.Version);
+			Logs.Editor.Write("Integrating uninstall of package '{0} {1}'...", e.Package.Id, e.Package.Version);
 
 			// Determine all files that are referenced by a package, and the ones referenced by this one
 			IEnumerable<string> localFiles = this.CreateFileMapping(e.Package).Select(p => p.Key);
 
 			// Schedule files for removal
 			PackageUpdateSchedule updateSchedule = this.PrepareUpdateSchedule();
-			foreach (var packageFile in localFiles)
+			foreach (string packageFile in localFiles)
 			{
 				// Don't remove any file that is still referenced by a local package
 				bool stillInUse = false;
@@ -925,12 +1015,12 @@ namespace Duality.Editor.PackageManagement
 				else if (package.Version > e.Package.Version)
 				{
 					e.Cancel = true;
-				}
 			}
+		}
 		}
 		private void manager_PackageInstalled(object sender, PackageOperationEventArgs e)
 		{
-			Log.Editor.Write("Integrating install of package '{0} {1}'...", e.Package.Id, e.Package.Version);
+			Logs.Editor.Write("Integrating install of package '{0} {1}'...", e.Package.Id, e.Package.Version);
 			
 			// Update package entries from local config
 			PackageInfo packageInfo = this.GetPackage(new PackageName(e.Package.Id, e.Package.Version.Version));
@@ -998,6 +1088,66 @@ namespace Duality.Editor.PackageManagement
 			if (result == DialogResult.OK)
 			{
 				args.AcceptLicense();
+			}
+		}
+
+		/// <summary>
+		/// From the given list of target frameworks, this methods selects the one that best matches
+		/// the one we want for installed packages.
+		/// </summary>
+		/// <param name="frameworks"></param>
+		/// <returns></returns>
+		internal static FrameworkName SelectBestFrameworkMatch(List<FrameworkName> frameworks)
+		{
+			int highestScore = -1;
+			FrameworkName bestMatch = null;
+			foreach (FrameworkName framework in frameworks)
+			{
+				int score = GetFrameworkMatchScore(framework);
+				if (score > highestScore)
+				{
+					highestScore = score;
+					bestMatch = framework;
+				}
+			}
+			return bestMatch;
+		}
+		/// <summary>
+		/// Determines a score value for the given target framework representing how well it
+		/// matches the one we want for installed packages.
+		/// </summary>
+		/// <param name="framework"></param>
+		/// <returns></returns>
+		private static int GetFrameworkMatchScore(FrameworkName framework)
+		{
+			// A null framework is a valid value, as it represents NuGet package files
+			// that are not associated with any specific target framework. For legacy
+			// reasons, we score them slightly higher than defined, but completely unknown
+			// frameworks.
+			if (framework == null) return 1;
+
+			// Since the context of our package selection is editor and desktop deployment
+			// we'll prefer .NET Framework 4.5 binaries over others.
+			switch (framework.Identifier)
+			{
+				case ".NETPortable":
+					if (framework.Profile == "net45+win8+wpa81") // Profile 111
+						return 50;
+					else if (framework.Profile.Contains("net45"))
+						return 49;
+					else if (framework.Profile.Contains("net40"))
+						return 48;
+					else
+						return 40;
+				case ".NETFramework":
+					if (framework.Version == new Version(4, 5))
+						return 100;
+					else if (framework.Version < new Version(4, 5))
+						return 90;
+					else
+						return 80;
+				default:
+					return 0;
 			}
 		}
 	}

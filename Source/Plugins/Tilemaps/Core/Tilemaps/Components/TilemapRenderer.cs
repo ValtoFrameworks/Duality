@@ -32,11 +32,9 @@ namespace Duality.Plugins.Tilemaps
 
 		
 		/// <summary>
-		/// [GET] The base depth offset that will be used when rendering a non-flat / deep <see cref="Tilemap"/>.
-		/// This property represents the sum of all non-local depth adjustments in the rendered <see cref="Tilemap"/>,
-		/// expressed as an offset to the depth that is implicitly defined by the <see cref="Transform"/> Z position.
-		/// 
-		/// This offset is automatically calculated based on <see cref="DepthOffset"/> and <see cref="TileDepthOffset"/>.
+		/// [GET] The base depth offset for generating tile vertices in this <see cref="Tilemap"/>, calculated based
+		/// on <see cref="DepthOffset"/> and <see cref="TileDepthOffset"/>.
+		/// For an absolute offset that is not based on per-tile depth, see <see cref="DepthOffset"/>.
 		/// </summary>
 		[EditorHintFlags(MemberFlags.Invisible)]
 		public float BaseDepthOffset
@@ -55,8 +53,8 @@ namespace Duality.Plugins.Tilemaps
 			}
 		}
 		/// <summary>
-		/// [GET / SET] The depth offset for the rendered <see cref="Tilemap"/> that is added
-		/// to each output vertex without contributing to perspective effects such as parallax.
+		/// [GET / SET] An absolute depth offset that is added to the entire <see cref="Tilemap"/> as whole.
+		/// For a relative offset based on per-tile depth, see <see cref="BaseDepthOffset"/>.
 		/// </summary>
 		public float DepthOffset
 		{
@@ -288,12 +286,7 @@ namespace Duality.Plugins.Tilemaps
 
 			// Determine rendering parameters
 			Material material = (tileset != null ? tileset.RenderMaterial : null) ?? Material.Checkerboard.Res;
-			ColorRgba mainColor = material.MainColor * this.colorTint;
-
-			// Reserve the required space for vertex data in our locally cached buffer
-			if (this.vertices == null) this.vertices = new RawList<VertexC1P3T2>();
-			this.vertices.Count = renderedTileCount * 4;
-			VertexC1P3T2[] vertexData = this.vertices.Data;
+			ColorRgba mainColor = this.colorTint;
 			
 			// Determine and adjust data for Z offset generation
 			float depthPerTile = -cullingIn.TileSize.Y * cullingIn.TilemapScale * this.tileDepthScale;
@@ -302,22 +295,29 @@ namespace Duality.Plugins.Tilemaps
 				depthPerTile = 0.0f;
 
 			float originDepthOffset = Rect.Align(this.origin, 0, 0, 0, tileCount.Y * depthPerTile).Y;
-
 			if (this.tileDepthMode == TileDepthOffsetMode.World)
 				originDepthOffset += (this.GameObj.Transform.Pos.Y / (float)tileSize.Y) * depthPerTile;
 
-			cullingOut.RenderOriginView.Z += this.offset + this.tileDepthOffset * depthPerTile + originDepthOffset;
+			float renderBaseOffset = this.offset + this.tileDepthOffset * depthPerTile + originDepthOffset;
 
 			// Prepare vertex generation data
-			Vector2 tileXStep = cullingOut.XAxisView * cullingIn.TileSize.X;
-			Vector2 tileYStep = cullingOut.YAxisView * cullingIn.TileSize.Y;
-			Vector3 renderPos = cullingOut.RenderOriginView;
+			Vector2 tileXStep = cullingOut.XAxisWorld * cullingIn.TileSize.X;
+			Vector2 tileYStep = cullingOut.YAxisWorld * cullingIn.TileSize.Y;
+			Vector3 renderPos = cullingOut.RenderOriginWorld;
+			float renderOffset = renderBaseOffset;
 			Point2 tileGridPos = cullingOut.VisibleTileStart;
+
+			// Reserve the required space for vertex data in our locally cached buffer
+			const int MaxVerticesPerBatch = 65532;
+			if (this.vertices == null) this.vertices = new RawList<VertexC1P3T2>();
+			this.vertices.Count = Math.Min(renderedTileCount * 4, MaxVerticesPerBatch);
+			VertexC1P3T2[] vertexData = this.vertices.Data;
 
 			// Prepare vertex data array for batch-submitting
 			IReadOnlyGrid<Tile> tiles = tilemap.Tiles;
 			TileInfo[] tileData = tileset.TileData.Data;
 			int submittedTileCount = 0;
+			int submittedBatchCount = 0;
 			int vertexBaseIndex = 0;
 			for (int tileIndex = 0; tileIndex < renderedTileCount; tileIndex++)
 			{
@@ -333,28 +333,32 @@ namespace Duality.Plugins.Tilemaps
 					{
 						vertexData[vertexBaseIndex + 0].Pos.X = renderPos.X;
 						vertexData[vertexBaseIndex + 0].Pos.Y = renderPos.Y;
-						vertexData[vertexBaseIndex + 0].Pos.Z = renderPos.Z + localDepthOffset;
+						vertexData[vertexBaseIndex + 0].Pos.Z = renderPos.Z;
+						vertexData[vertexBaseIndex + 0].DepthOffset = renderOffset + localDepthOffset;
 						vertexData[vertexBaseIndex + 0].TexCoord.X = uvRect.X;
 						vertexData[vertexBaseIndex + 0].TexCoord.Y = uvRect.Y;
 						vertexData[vertexBaseIndex + 0].Color = mainColor;
 
 						vertexData[vertexBaseIndex + 1].Pos.X = renderPos.X + tileYStep.X;
 						vertexData[vertexBaseIndex + 1].Pos.Y = renderPos.Y + tileYStep.Y;
-						vertexData[vertexBaseIndex + 1].Pos.Z = renderPos.Z + localDepthOffset + depthPerTile;
+						vertexData[vertexBaseIndex + 1].Pos.Z = renderPos.Z;
+						vertexData[vertexBaseIndex + 1].DepthOffset = renderOffset + localDepthOffset + depthPerTile;
 						vertexData[vertexBaseIndex + 1].TexCoord.X = uvRect.X;
 						vertexData[vertexBaseIndex + 1].TexCoord.Y = uvRect.Y + uvRect.H;
 						vertexData[vertexBaseIndex + 1].Color = mainColor;
 
 						vertexData[vertexBaseIndex + 2].Pos.X = renderPos.X + tileXStep.X + tileYStep.X;
 						vertexData[vertexBaseIndex + 2].Pos.Y = renderPos.Y + tileXStep.Y + tileYStep.Y;
-						vertexData[vertexBaseIndex + 2].Pos.Z = renderPos.Z + localDepthOffset + depthPerTile;
+						vertexData[vertexBaseIndex + 2].Pos.Z = renderPos.Z;
+						vertexData[vertexBaseIndex + 2].DepthOffset = renderOffset + localDepthOffset + depthPerTile;
 						vertexData[vertexBaseIndex + 2].TexCoord.X = uvRect.X + uvRect.W;
 						vertexData[vertexBaseIndex + 2].TexCoord.Y = uvRect.Y + uvRect.H;
 						vertexData[vertexBaseIndex + 2].Color = mainColor;
 				
 						vertexData[vertexBaseIndex + 3].Pos.X = renderPos.X + tileXStep.X;
 						vertexData[vertexBaseIndex + 3].Pos.Y = renderPos.Y + tileXStep.Y;
-						vertexData[vertexBaseIndex + 3].Pos.Z = renderPos.Z + localDepthOffset;
+						vertexData[vertexBaseIndex + 3].Pos.Z = renderPos.Z;
+						vertexData[vertexBaseIndex + 3].DepthOffset = renderOffset + localDepthOffset;
 						vertexData[vertexBaseIndex + 3].TexCoord.X = uvRect.X + uvRect.W;
 						vertexData[vertexBaseIndex + 3].TexCoord.Y = uvRect.Y;
 						vertexData[vertexBaseIndex + 3].Color = mainColor;
@@ -362,8 +366,8 @@ namespace Duality.Plugins.Tilemaps
 						bool vertical = tileData[tile.Index].IsVertical;
 						if (vertical)
 						{
-							vertexData[vertexBaseIndex + 0].Pos.Z += depthPerTile;
-							vertexData[vertexBaseIndex + 3].Pos.Z += depthPerTile;
+							vertexData[vertexBaseIndex + 0].DepthOffset += depthPerTile;
+							vertexData[vertexBaseIndex + 3].DepthOffset += depthPerTile;
 						}
 
 						submittedTileCount++;
@@ -378,22 +382,39 @@ namespace Duality.Plugins.Tilemaps
 				{
 					tileGridPos.X = cullingOut.VisibleTileStart.X;
 					tileGridPos.Y++;
-					renderPos = cullingOut.RenderOriginView;
+					renderPos = cullingOut.RenderOriginWorld;
 					renderPos.X += tileYStep.X * (tileGridPos.Y - cullingOut.VisibleTileStart.Y);
 					renderPos.Y += tileYStep.Y * (tileGridPos.Y - cullingOut.VisibleTileStart.Y);
-					renderPos.Z += tileGridPos.Y * depthPerTile;
+					renderOffset = renderBaseOffset + tileGridPos.Y * depthPerTile;
+				}
+
+				// If we reached the maximum number of vertices per batch, submit early and restart
+				if (vertexBaseIndex >= MaxVerticesPerBatch)
+				{
+					device.AddVertices(
+						material,
+						VertexMode.Quads,
+						vertexData,
+						vertexBaseIndex);
+					vertexBaseIndex = 0;
+					submittedBatchCount++;
 				}
 			}
 
-			// Submit all the vertices as one draw batch
-			device.AddVertices(
-				material,
-				VertexMode.Quads, 
-				vertexData, 
-				submittedTileCount * 4);
+			// Submit the final batch will all remaining vertices
+			if (vertexBaseIndex > 0)
+			{
+				device.AddVertices(
+					material,
+					VertexMode.Quads,
+					vertexData,
+					vertexBaseIndex);
+				submittedBatchCount++;
+			}
 
 			Profile.AddToStat(@"Duality\Stats\Render\Tilemaps\NumTiles", renderedTileCount);
 			Profile.AddToStat(@"Duality\Stats\Render\Tilemaps\NumVertices", submittedTileCount * 4);
+			Profile.AddToStat(@"Duality\Stats\Render\Tilemaps\NumBatches", submittedBatchCount);
 		}
 	}
 }
